@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+
+LDFLAGS := -s -w
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	@true
+
+override_dh_auto_test:
+	cd go && go test -vet=off -timeout 10m ./cmd/dolt/... ./utils/remotesrv/... ./store/cmd/noms/...
+
+override_dh_auto_install:
+	mkdir -p $(CURDIR)/debian/tmp/usr/bin
+	cd go && CGO_ENABLED=1 go build -mod=readonly -ldflags "$(LDFLAGS)" -o $(CURDIR)/debian/tmp/usr/bin/dolt ./cmd/dolt/.
+	cd go && CGO_ENABLED=1 go build -mod=readonly -ldflags "$(LDFLAGS)" -o $(CURDIR)/debian/tmp/usr/bin/remotesrv ./utils/remotesrv/.
+	cd go && CGO_ENABLED=1 go build -mod=readonly -ldflags "$(LDFLAGS)" -o $(CURDIR)/debian/tmp/usr/bin/noms ./store/cmd/noms/.
+
+override_dh_clean:
+	dh_clean
+	rm -rf $(CURDIR)/debian/tmp

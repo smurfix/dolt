@@ -1,0 +1,28 @@
+Source: dolt
+Section: database
+Priority: optional
+Maintainer: Matthias Urlichs <matthias@urlichs.de>
+Build-Depends:
+ debhelper-compat (= 13),
+ golang-go (>= 1.26~),
+ gcc,
+ libc6-dev,
+ libicu-dev,
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/dolthub/dolt
+Vcs-Git: https://github.com/dolthub/dolt.git
+Vcs-Browser: https://github.com/dolthub/dolt
+
+Package: dolt
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: SQL database with Git-style version control
+ Dolt is a relational SQL database that you can fork, clone, branch,
+ merge, push and pull exactly like a Git repository. It treats data the
+ way source code is treated: collaborate, review diffs, roll back
+ mistakes, and reconstruct any prior state of the data.
+ .
+ This package provides the `dolt` command-line client together with the
+ bundled `noms` chunk-store inspection tool and the `remotesrv`
+ remote-storage helper.

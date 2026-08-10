@@ -1,0 +1,5 @@
+dolt (2.2.3.0) smurf; urgency=medium
+
+  * Initial packaging of dolt at upstream v2.2.3.
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Mon, 10 Aug 2026 20:47:10 +0200
