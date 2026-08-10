@@ -183,7 +183,7 @@ func TestServerBadArgs(t *testing.T) {
 
 func TestServerGoodParams(t *testing.T) {
 	tests := []servercfg.ServerConfig{
-		DefaultCommandLineServerConfig(),
+		DefaultCommandLineServerConfig().WithPort(15413),
 		DefaultCommandLineServerConfig().WithHost("127.0.0.1").WithPort(15400),
 		DefaultCommandLineServerConfig().WithHost("localhost").WithPort(15401),
 		//DefaultCommandLineServerConfig().WithHost("::1").WithPort(15402), // Fails on Jenkins, assuming no IPv6 support
@@ -197,7 +197,7 @@ func TestServerGoodParams(t *testing.T) {
 		DefaultCommandLineServerConfig().withUser("testusernamE").withPassword("hunter2").withTimeout(4).WithPort(15410),
 		DefaultCommandLineServerConfig().withLogFormat(servercfg.LogFormat_Text).WithPort(15411),
 		DefaultCommandLineServerConfig().withLogFormat(servercfg.LogFormat_JSON).WithPort(15412),
-		DefaultCommandLineServerConfig().withAllowCleartextPasswords(true),
+		DefaultCommandLineServerConfig().withAllowCleartextPasswords(true).WithPort(15414),
 	}
 
 	for _, test := range tests {
