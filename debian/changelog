@@ -1,3 +1,9 @@
+dolt (2.2.3.1) smurf; urgency=medium
+
+  * Merge main
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Tue, 11 Aug 2026 08:54:58 +0200
+
 dolt (2.2.3.0) smurf; urgency=medium
 
   * Initial packaging of dolt at upstream v2.2.3.
