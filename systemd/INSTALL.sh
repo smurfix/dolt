@@ -5,6 +5,8 @@
 # $DESTDIR/lib (plus the config example under $DESTDIR/etc):
 #
 #   dolt.service          -> $DESTDIR/lib/systemd/system/dolt.service
+#   dolt.socket            -> $DESTDIR/lib/systemd/system/dolt.socket
+#   dolt-metrics.socket    -> $DESTDIR/lib/systemd/system/dolt-metrics.socket
 #   dolt.sysusers         -> $DESTDIR/lib/sysusers.d/dolt.conf
 #   dolt.tmpfiles         -> $DESTDIR/lib/tmpfiles.d/dolt.conf
 #   server.yaml.example   -> $DESTDIR/etc/dolt/server.yaml.example
@@ -44,18 +46,22 @@ CFG_DIR=$DESTDIR/etc/dolt
 
 # Source assets, keyed to their shipped filenames.
 SERVICE_SRC=$SCRIPT_DIR/dolt.service
+SOCKET_SRC=$SCRIPT_DIR/dolt.socket
+METRICS_SOCKET_SRC=$SCRIPT_DIR/dolt-metrics.socket
 SYSUSERS_SRC=$SCRIPT_DIR/dolt.sysusers
 TMPFILES_SRC=$SCRIPT_DIR/dolt.tmpfiles
 CONFIG_EXAMPLE_SRC=$SCRIPT_DIR/server.yaml.example
 
 # Sanity-check the bundle is intact before touching the filesystem.
-for f in "$SERVICE_SRC" "$SYSUSERS_SRC" "$TMPFILES_SRC" "$CONFIG_EXAMPLE_SRC"; do
+for f in "$SERVICE_SRC" "$SOCKET_SRC" "$METRICS_SOCKET_SRC" "$SYSUSERS_SRC" "$TMPFILES_SRC" "$CONFIG_EXAMPLE_SRC"; do
     [ -f "$f" ] || { echo "INSTALL.sh: missing asset: $f" >&2; exit 1; }
 done
 
 echo "Installing dolt systemd integration into $DESTDIR"
 
 install -D -m0644 "$SERVICE_SRC"        "$UNIT_DIR/dolt.service"
+install -D -m0644 "$SOCKET_SRC"          "$UNIT_DIR/dolt.socket"
+install -D -m0644 "$METRICS_SOCKET_SRC"   "$UNIT_DIR/dolt-metrics.socket"
 install -D -m0644 "$SYSUSERS_SRC"        "$SYSUSERS_DIR/dolt.conf"
 install -D -m0644 "$TMPFILES_SRC"        "$TMPFILES_DIR/dolt.conf"
 install -D -m0644 "$CONFIG_EXAMPLE_SRC"  "$CFG_DIR/server.yaml.example"
@@ -64,6 +70,8 @@ cat <<EOF
 
 Done. Installed:
   $UNIT_DIR/dolt.service
+  $UNIT_DIR/dolt.socket
+  $UNIT_DIR/dolt-metrics.socket
   $SYSUSERS_DIR/dolt.conf
   $TMPFILES_DIR/dolt.conf
   $CFG_DIR/server.yaml.example
@@ -76,5 +84,10 @@ Activate on a live system (skip when staging into a DESTDIR build root):
   systemd-sysusers $SYSUSERS_DIR/dolt.conf
   systemd-tmpfiles --create $TMPFILES_DIR/dolt.conf
   systemctl daemon-reload
+  # Plain service (binds listeners from server.yaml):
   systemctl enable --now dolt.service
+  # ...or socket-activated (systemd pre-binds; service starts on first connect).
+  # Each role needs its OWN socket unit (one FileDescriptorName= per [Socket]):
+  systemctl enable --now dolt.socket          # MySQL listeners
+  systemctl enable --now dolt-metrics.socket  # Prometheus /metrics (optional)
 EOF

@@ -1,0 +1,50 @@
+# dolt.socket — systemd socket-activation front for dolt.service (MySQL role).
+#
+# Pre-binds the MySQL listening sockets and hands them to dolt via
+# LISTEN_FDS/LISTEN_FDNAMES. dolt serves the MySQL protocol over EVERY
+# socket in this unit concurrently (internal fan-in listener), so you can
+# list a mix of inet and unix entries here.
+#
+# IMPORTANT: systemd assigns ONE FileDescriptorName= to ALL sockets in a
+# single [Socket] section — the directive may not be repeated, and it cannot
+# vary per ListenStream=/ListenSpecial= line. So all sockets defined here
+# share the name "dolt.sql", and dolt routes them to the MySQL role by that
+# name's ".sql" suffix. To expose sockets under a DIFFERENT role (e.g. the
+# Prometheus /metrics endpoint), use a SEPARATE socket unit — see
+# dolt-metrics.socket.
+#
+# Edit the ListenStream= / ListenSpecial= lines to match your deployment,
+# then `systemctl enable --now dolt.socket`. The service starts on demand
+# when the first connection arrives.
+#
+# See sd_listen_fds(3), systemd.socket(5).
+
+[Unit]
+Description=dolt SQL server sockets (MySQL)
+Documentation=https://docs.dolthub.com/introduction
+PartOf=dolt.service
+
+[Socket]
+# Single name shared by every socket in this unit; dolt keys on the ".sql"
+# suffix to route all of them to the MySQL role.
+FileDescriptorName=dolt.sql
+# Explicit so renaming this socket unit doesn't break activation routing.
+Service=dolt.service
+
+# Loopback TCP — typical local-clients case.
+ListenStream=127.0.0.1:3306
+
+# Unix-domain socket. SocketUser/Group/Mode apply only to this entry.
+# Lives under /run/dolt (the service's RuntimeDirectory) so it vanishes on
+# reboot; symlink elsewhere if you need a stable path.
+ListenSpecial=/run/dolt/mysql.sock
+SocketUser=_dolt
+SocketGroup=_dolt
+SocketMode=0770
+
+# Public TCP — uncomment to additionally bind all interfaces. Both this and
+# the loopback entry above will be served concurrently.
+# ListenStream=0.0.0.0:3306
+
+[Install]
+WantedBy=sockets.target

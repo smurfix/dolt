@@ -6,6 +6,13 @@ Documentation=https://docs.dolthub.com/introduction
 # sockets bind only once interfaces are up.
 Requires=network-online.target
 After=network-online.target
+# Socket activation (opt-in): when dolt.socket is enabled, systemd pre-binds
+# the listening sockets and hands them to this service via LISTEN_FDS; dolt
+# detects them at startup and serves over them instead of binding from
+# /etc/dolt/server.yaml. We deliberately do NOT Require= dolt.socket here:
+# that keeps `systemctl start dolt.service` working standalone (binding its
+# own listeners from config) when socket activation isn't wanted. Enable
+# dolt.socket to use activation; see dolt.socket for the socket definitions.
 # Refuse to start until an administrator has installed a config. Copy
 # /etc/dolt/server.yaml.example to /etc/dolt/server.yaml and edit it;
 # until then `start` is a no-op (condition-not-met), not a failure.
