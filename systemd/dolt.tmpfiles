@@ -1,0 +1,9 @@
+# Provisions the admin-facing configuration home for the dolt
+# sql-server. The transient (/run/dolt) and state (/var/lib/dolt)
+# directories are managed by the service unit's own
+# RuntimeDirectory=/StateDirectory= directives, so they are deliberately
+# NOT duplicated here. See tmpfiles.d(5).
+#
+# /etc/dolt is root-owned but group-accessible to _dolt so the service
+# can read its configuration while administrators retain ownership.
+d /etc/dolt           0750 root _dolt -
