@@ -59,6 +59,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/utils/config"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
 	httputils "github.com/dolthub/dolt/go/libraries/utils/http"
+	sd "github.com/coreos/go-systemd/v22/daemon"
 	"github.com/dolthub/dolt/go/libraries/utils/svcs"
 	"github.com/dolthub/dolt/go/store/chunks"
 	eventsapi "github.com/dolthub/eventsapi_schema/dolt/services/eventsapi/v1alpha1"
@@ -119,7 +120,30 @@ func Serve(
 	if err != nil {
 		return err, nil
 	}
+
+	// All registered services have finished Init(): listeners are bound and
+	// the accept loops are launching. Tell systemd (if running under it)
+	// that we are ready. SdNotify is a no-op when $NOTIFY_SOCKET is unset,
+	// so this is harmless outside of systemd.
+	notifyReady()
+
+	defer notifyStopping()
 	return nil, cfg.Controller.WaitForStop()
+}
+
+// notifyReady tells systemd the service has finished initialising and is
+// accepting connections. Under systemd Type=notify this releases the
+// `systemctl start` call; outside systemd (no $NOTIFY_SOCKET) SdNotify is
+// a no-op and returns (false, nil), which we discard.
+func notifyReady() {
+	_, _ = sd.SdNotify(false, sd.SdNotifyReady)
+}
+
+// notifyStopping tells systemd the service has begun orderly shutdown, so
+// the manager stops considering it ready while it drains connections.
+// Paired with the deferred call in Serve so it fires however Serve exits.
+func notifyStopping() {
+	_, _ = sd.SdNotify(false, "STOPPING=1")
 }
 
 func ConfigureServices(

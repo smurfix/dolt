@@ -12,7 +12,10 @@ After=network-online.target
 ConditionPathExists=/etc/dolt/server.yaml
 
 [Service]
-Type=simple
+# dolt sends READY=1 (and STOPPING=1) via sd_notify once its listeners
+# are bound, so systemd tracks readiness from the process itself rather
+# than guessing from process spawn. See sd_notify(3).
+Type=notify
 User=_dolt
 Group=_dolt
 
@@ -28,10 +31,28 @@ StateDirectory=dolt
 # --- Command --------------------------------------------------------------
 ExecStart=/usr/bin/dolt sql-server --config /etc/dolt/server.yaml
 
-# Graceful shutdown: dolt traps SIGTERM (via signal.NotifyContext);
-# give it a generous deadline to flush chunks and drop listeners.
+# Because readiness comes from sd_notify, the start timeout measures wall
+# clock until READY=1 arrives. Allow ample room for first-run schema work.
+TimeoutStartSec=120s
+
+# Graceful shutdown: dolt traps SIGTERM (via signal.NotifyContext) and emits
+# STOPPING=1; give it a generous deadline to drain connections and flush
+# chunks before systemd falls back to SIGKILL.
 KillSignal=SIGTERM
 TimeoutStopSec=60s
+
+# Restart on unexpected exit, but treat a clean `systemctl stop` (exit 0 /
+# SIGHUP-free) as intentional. Space retries so a flapping listener doesn't
+# hammer the port.
+Restart=on-failure
+RestartSec=5s
+
+# Watchdog: if enabled, dolt would ping systemd with WATCHDOG=1 while
+# healthy; absence past WatchdogSec triggers a restart. Left DISABLED for
+# now — dolt does not yet emit watchdog pings, so enabling this would
+# cause spurious restarts. Uncomment only after the binary grows a
+# periodic sd.SdNotify(false, "WATCHDOG=1") heartbeat.
+# WatchdogSec=60s
 
 # Hardening — dolt needs neither elevated privileges nor broad FS access.
 NoNewPrivileges=yes
