@@ -684,11 +684,11 @@ func (di *doltIndex) CanSupport(*sql.Context, ...sql.Range) bool {
 
 // CanSupportOrderBy implements the interface sql.Index.
 func (di *doltIndex) CanSupportOrderBy(expr sql.Expression) bool {
-	distance, ok := expr.(*vector.Distance)
+	distance, ok := expr.(vector.OrderableDistance)
 	if !ok {
 		return false
 	}
-	return di.vector && di.vectorProps.DistanceType.CanEval(distance.DistanceType)
+	return di.vector && di.vectorProps.DistanceType != nil && di.vectorProps.DistanceType.CanEval(distance.DistanceMetric())
 }
 
 // ColumnExpressionTypes implements the interface sql.Index.
@@ -971,6 +971,11 @@ func (di *doltIndex) IsFullText() bool {
 // IsVector implements sql.Index
 func (di *doltIndex) IsVector() bool {
 	return di.vector
+}
+
+// VectorProperties returns the vector index properties of this index. Only set when IsVector is true.
+func (di *doltIndex) VectorProperties() schema.VectorProperties {
+	return di.vectorProps
 }
 
 // IsPrimaryKey implements DoltIndex.
@@ -1282,7 +1287,7 @@ func (di *doltIndex) prollyRangesFromSqlRanges(ctx context.Context, ns tree.Node
 
 			nilBound := field.Lo.Value == nil && field.Hi.Value == nil
 			if foundDiscontinuity || nilBound {
-				// A discontinous variable followed by any restriction
+				// A discontinuous variable followed by any restriction
 				// can partition the key space.
 				isContiguous = false
 			}
