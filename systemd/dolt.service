@@ -1,0 +1,93 @@
+[Unit]
+Description=dolt SQL server (Git-style version-controlled database)
+Documentation=https://docs.dolthub.com/introduction
+# Pure network-listening daemon: hard-depend on the online network stack
+# rather than merely wanting it, and order startup after it so listening
+# sockets bind only once interfaces are up.
+Requires=network-online.target
+After=network-online.target
+# Socket activation (opt-in): when dolt.socket is enabled, systemd pre-binds
+# the listening sockets and hands them to this service via LISTEN_FDS; dolt
+# detects them at startup and serves over them instead of binding from
+# /etc/dolt/server.yaml. We deliberately do NOT Require= dolt.socket here:
+# that keeps `systemctl start dolt.service` working standalone (binding its
+# own listeners from config) when socket activation isn't wanted. Enable
+# dolt.socket to use activation; see dolt.socket for the socket definitions.
+# Refuse to start until an administrator has installed a config. Copy
+# /etc/dolt/server.yaml.example to /etc/dolt/server.yaml and edit it;
+# until then `start` is a no-op (condition-not-met), not a failure.
+ConditionPathExists=/etc/dolt/server.yaml
+
+[Service]
+# dolt sends READY=1 (and STOPPING=1) via sd_notify once its listeners
+# are bound, so systemd tracks readiness from the process itself rather
+# than guessing from process spawn. See sd_notify(3).
+Type=notify
+User=_dolt
+Group=_dolt
+
+# --- Working layout -------------------------------------------------------
+# /run/dolt and /var/lib/dolt are created and chowned by systemd via
+# RuntimeDirectory=/StateDirectory=. /etc/dolt is provisioned separately
+# by the packaged tmpfiles snippet (root:_dolt, 0750).
+WorkingDirectory=/var/lib/dolt
+Environment=DOLT_ROOT_PATH=/var/lib/dolt
+RuntimeDirectory=dolt
+StateDirectory=dolt
+
+# --- Command --------------------------------------------------------------
+ExecStart=/usr/bin/dolt sql-server --config /etc/dolt/server.yaml
+
+# Because readiness comes from sd_notify, the start timeout measures wall
+# clock until READY=1 arrives. Allow ample room for first-run schema work.
+TimeoutStartSec=120s
+
+# Graceful shutdown: dolt traps SIGTERM (via signal.NotifyContext) and emits
+# STOPPING=1; give it a generous deadline to drain connections and flush
+# chunks before systemd falls back to SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=60s
+
+# Restart on unexpected exit, but treat a clean `systemctl stop` (exit 0 /
+# SIGHUP-free) as intentional. Space retries so a flapping listener doesn't
+# hammer the port.
+Restart=on-failure
+RestartSec=5s
+
+# Watchdog: if enabled, dolt would ping systemd with WATCHDOG=1 while
+# healthy; absence past WatchdogSec triggers a restart. Left DISABLED for
+# now — dolt does not yet emit watchdog pings, so enabling this would
+# cause spurious restarts. Uncomment only after the binary grows a
+# periodic sd.SdNotify(false, "WATCHDOG=1") heartbeat.
+# WatchdogSec=60s
+
+# Hardening — dolt needs neither elevated privileges nor broad FS access.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+# Config dir is read-only to the service; admins edit /etc/dolt out-of-band.
+ReadWritePaths=/var/lib/dolt /run/dolt
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+RestrictRealtime=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Optional resource caps — uncomment to taste.
+# MemoryMax=4G
+# TasksMax=512
+
+[Install]
+# Standard non-graphical system boot target (runlevel 3). This is the
+# conventional install hook for system daemons — including pure network
+# services such as sshd / nginx / postgres — and is independent of user
+# logins. The network dependency is expressed above via Requires=/After=,
+# not via this target.
+WantedBy=multi-user.target

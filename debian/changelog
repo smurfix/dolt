@@ -1,3 +1,9 @@
+dolt (2.3.2.2) smurf; urgency=medium
+
+  * Merge systemd
+
+ -- Matthias Urlichs <matthias@urlichs.de>  Thu, 03 Sep 2026 21:29:00 +0200
+
 dolt (2.3.2.1) smurf; urgency=medium
 
   * Merge 2.3.2

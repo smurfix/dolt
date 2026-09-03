@@ -1,3 +1,5 @@
 usr/bin/dolt usr/bin
 usr/bin/remotesrv usr/bin
 usr/bin/noms usr/bin
+etc
+usr/lib

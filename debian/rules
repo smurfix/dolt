@@ -17,6 +17,11 @@ override_dh_auto_install:
 	cd go && CGO_ENABLED=1 go build -mod=readonly -ldflags "$(LDFLAGS)" -o $(CURDIR)/debian/tmp/usr/bin/remotesrv ./utils/remotesrv/.
 	cd go && CGO_ENABLED=1 go build -mod=readonly -ldflags "$(LDFLAGS)" -o $(CURDIR)/debian/tmp/usr/bin/noms ./store/cmd/noms/.
 
+	mkdir -p debian/tmp/usr/lib/systemd/system debian/tmp/etc \
+		debian/tmp/usr/lib/sysusers.d debian/tmp/usr/lib/tmpfiles.d
+	ln -s usr/lib debian/tmp/lib
+	DESTDIR=$(CURDIR)/debian/tmp systemd/INSTALL.sh
+
 override_dh_clean:
 	dh_clean
 	rm -rf $(CURDIR)/debian/tmp
