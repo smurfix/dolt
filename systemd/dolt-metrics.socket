@@ -1,0 +1,31 @@
+# dolt-metrics.socket — socket activation for dolt's Prometheus /metrics
+# endpoint (role ".metrics").
+#
+# Separate from dolt.socket because systemd assigns a single
+# FileDescriptorName= to all sockets in one [Socket] section; putting the
+# metrics listener in dolt.socket would label it ".sql" and route it to the
+# MySQL role by mistake. Its own unit + its own name ("dolt.metrics") lets
+# dolt distinguish it.
+#
+# dolt serves metrics here when EITHER its config enables the metrics
+# server OR this socket is supplied. Enabling this socket therefore turns
+# metrics on even with no metrics stanza in server.yaml.
+#
+# NOTE: dolt currently consumes only the FIRST listener from this unit (the
+# HTTP server takes a single net.Listener). Keep exactly one ListenStream=
+# here; additional entries would be closed with a warning.
+#
+# See sd_listen_fds(3), systemd.socket(5).
+
+[Unit]
+Description=dolt SQL server sockets (metrics)
+Documentation=https://docs.dolthub.com/introduction
+PartOf=dolt.service
+
+[Socket]
+FileDescriptorName=dolt.metrics
+Service=dolt.service
+ListenStream=127.0.0.1:9090
+
+[Install]
+WantedBy=sockets.target

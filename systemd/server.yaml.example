@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# dolt sql-server configuration
+# ---------------------------------------------------------------------------
+# Consumed by the `dolt.service` systemd unit via
+#   dolt sql-server --config /etc/dolt/server.yaml
+#
+# Copy this file to /etc/dolt/server.yaml and edit to taste. Only keys you
+# actually override need to be present; everything below documents the
+# defaults. Field reference:
+#   https://docs.dolthub.com/sql-reference/server/configuration
+# ---------------------------------------------------------------------------
+
+# Where dolt looks for repositories to serve (and creates new ones).
+# One dolt database == one sub-directory here. Matches StateDirectory.
+data_dir: /var/lib/dolt
+
+# Non-database metadata (privileges, branch control). Kept beside the data.
+cfg_dir: /var/lib/dolt/.doltcfg
+
+# Users/grants table. Created automatically on first boot.
+privilege_file: /var/lib/dolt/.doltcfg/privileges.db
+
+# Branch-level ACL store. Created automatically on first boot.
+branch_control_file: /var/lib/dolt/.doltcfg/branch_control.db
+
+log_level: info          # trace | debug | info | warning | error | fatal
+log_format: text         # text | json
+
+listener:
+  # Bind loopback only by default. Set 0.0.0.0 to reach other hosts;
+  # remember to firewall the port accordingly.
+  host: 127.0.0.1
+  port: 3307
+  max_connections: 1000
+  back_log: 50
+  # Unix-domain socket — handy for local admin without opening TCP.
+  socket: /run/dolt/mysql.sock
+  # read_timeout_millis:  28800000
+  # write_timeout_millis: 28800000
+  # require_secure_transport: false
+  # tls_cert: /etc/dolt/tls/server.crt
+  # tls_key:  /etc/dolt/tls/server.key
+
+behavior:
+  read_only: false
+  autocommit: true
+
+# remotesapi:
+#   port: 8000
+#   read_only: false
+
+# mcp_server:
+#   port: 7007
+#   user: root
+#   database: ""
+
+# system_variables:
+#   dolt_default_branch: main

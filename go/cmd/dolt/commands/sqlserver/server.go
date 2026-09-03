@@ -59,6 +59,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/utils/config"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
 	httputils "github.com/dolthub/dolt/go/libraries/utils/http"
+	sd "github.com/coreos/go-systemd/v22/daemon"
 	"github.com/dolthub/dolt/go/libraries/utils/svcs"
 	"github.com/dolthub/dolt/go/store/chunks"
 	eventsapi "github.com/dolthub/eventsapi_schema/dolt/services/eventsapi/v1alpha1"
@@ -78,6 +79,9 @@ var ExternalDisableUsers bool = false
 
 var ErrCouldNotLockDatabase = goerrors.NewKind("database \"%s\" is locked by another dolt process; either clone the database to run a second server, or stop the dolt process which currently holds an exclusive write lock on the database")
 
+// Config bundles the inputs needed to run a dolt sql-server. It is
+// populated by StartServer from CLI/YAML configuration and consumed by
+// Serve.
 type Config struct {
 	ServerConfig            servercfg.ServerConfig
 	DoltEnv                 *env.DoltEnv
@@ -86,6 +90,13 @@ type Config struct {
 	Controller              *svcs.Controller
 	ProtocolListenerFactory server.ProtocolListenerFunc
 	MCP                     *MCPConfig
+
+	// Activated holds the socket-activation listeners inherited from
+	// systemd, partitioned by role. When non-empty, the corresponding
+	// configured listeners are supplanted by these (so the inet host/port
+	// and unix-socket path from ServerConfig are ignored for that role).
+	// Populated automatically by Serve; callers normally leave it nil.
+	Activated *activatedSockets
 
 	// ProviderFactory controls how the DatabaseProvider is instantiated
 	ProviderFactory sqle.ProviderFactory
@@ -112,6 +123,25 @@ func Serve(
 		cfg.Controller = svcs.NewController()
 	}
 
+	// Collect systemd socket-activation listeners exactly once, before any
+	// service reads them: the activation library clears LISTEN_* from the
+	// environment on first enumeration. Stash them on cfg so downstream
+	// Init functions can substitute them for the configured bind targets.
+	if cfg.Activated == nil {
+		loaded := loadActivatedSockets()
+		cfg.Activated = &loaded
+	}
+	// remotesapi socket activation is not yet plumbed through the server
+	// internals (it binds its own dual HTTP/gRPC listeners from a string
+	// address). Close any inherited remotesapi sockets with a warning so
+	// they don't leak as held-open file descriptors.
+	for _, l := range cfg.Activated.remotesapi {
+		logrus.Warnf("socket activation: remotesapi listener at %s/%s received but not yet supported; closing",
+			l.Addr().Network(), l.Addr().String())
+		_ = l.Close()
+	}
+	cfg.Activated.remotesapi = nil
+
 	ConfigureServices(cfg)
 
 	go cfg.Controller.Start(ctx)
@@ -119,7 +149,30 @@ func Serve(
 	if err != nil {
 		return err, nil
 	}
+
+	// All registered services have finished Init(): listeners are bound and
+	// the accept loops are launching. Tell systemd (if running under it)
+	// that we are ready. SdNotify is a no-op when $NOTIFY_SOCKET is unset,
+	// so this is harmless outside of systemd.
+	notifyReady()
+
+	defer notifyStopping()
 	return nil, cfg.Controller.WaitForStop()
+}
+
+// notifyReady tells systemd the service has finished initialising and is
+// accepting connections. Under systemd Type=notify this releases the
+// `systemctl start` call; outside systemd (no $NOTIFY_SOCKET) SdNotify is
+// a no-op and returns (false, nil), which we discard.
+func notifyReady() {
+	_, _ = sd.SdNotify(false, sd.SdNotifyReady)
+}
+
+// notifyStopping tells systemd the service has begun orderly shutdown, so
+// the manager stops considering it ready while it drains connections.
+// Paired with the deferred call in Serve so it fires however Serve exits.
+func notifyStopping() {
+	_, _ = sd.SdNotify(false, "STOPPING=1")
 }
 
 func ConfigureServices(
@@ -253,7 +306,7 @@ func ConfigureServices(
 	var serverConf server.Config
 	LoadServerConfig := &svcs.AnonService{
 		InitF: func(context.Context) (err error) {
-			serverConf, err = getConfigFromServerConfig(cfg.ServerConfig, cfg.ProtocolListenerFactory)
+			serverConf, err = getConfigFromServerConfig(cfg.ServerConfig, cfg.ProtocolListenerFactory, cfg.Activated.sql)
 			return err
 		},
 	}
@@ -638,14 +691,32 @@ func ConfigureServices(
 	var metSrv SQLMetricsService
 	RunMetricsServer := &svcs.AnonService{
 		InitF: func(context.Context) (err error) {
-			if cfg.ServerConfig.MetricsHost() != "" && cfg.ServerConfig.MetricsPort() > 0 {
+			// Socket activation can supply the metrics listener directly; in
+			// that case the configured host/port are ignored and metrics is
+			// considered enabled even if unset in the YAML.
+			actMet := cfg.Activated.metrics
+			configured := cfg.ServerConfig.MetricsHost() != "" && cfg.ServerConfig.MetricsPort() > 0
+			if configured || len(actMet) > 0 {
 				metSrv.enabled = true
 
-				addr := fmt.Sprintf("%s:%d", cfg.ServerConfig.MetricsHost(), cfg.ServerConfig.MetricsPort())
-				metSrv.lis, err = net.Listen("tcp", addr)
-				if err != nil {
-					return err
+				if len(actMet) > 0 {
+					metSrv.lis = actMet[0]
+					if len(actMet) > 1 {
+						logrus.Warnf("socket activation: %d metrics listeners received; only the first is used", len(actMet))
+						for _, l := range actMet[1:] {
+							_ = l.Close()
+						}
+					}
+				} else {
+					addr := fmt.Sprintf("%s:%d", cfg.ServerConfig.MetricsHost(), cfg.ServerConfig.MetricsPort())
+					metSrv.lis, err = net.Listen("tcp", addr)
+					if err != nil {
+						return err
+					}
 				}
+				// Cosmetic address for logs and http.Server.Addr; reflects whatever
+				// listener we ended up with (bound or inherited).
+				displayAddr := metSrv.lis.Addr().String()
 
 				tlsConfig, err := servercfg.LoadMetricsTLSConfig(cfg.ServerConfig)
 				if err != nil {
@@ -658,7 +729,7 @@ func ConfigureServices(
 				enableMetricsAuth := jwksConfig != nil
 				requireLocalhostAuth := cfg.ServerConfig.MetricsJWTRequiredForLocalhost()
 
-				logrus.Infof("Starting metrics server. auth_enabled = %t, addr = %s, require_localhost_auth = %t", enableMetricsAuth, addr, requireLocalhostAuth)
+				logrus.Infof("Starting metrics server. auth_enabled = %t, addr = %s, require_localhost_auth = %t", enableMetricsAuth, displayAddr, requireLocalhostAuth)
 
 				if enableMetricsAuth {
 					mux.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -699,7 +770,7 @@ func ConfigureServices(
 				}
 
 				metSrv.srv = &http.Server{
-					Addr:      addr,
+					Addr:      displayAddr,
 					Handler:   mux,
 					TLSConfig: tlsConfig,
 				}
@@ -1224,10 +1295,35 @@ func newSessionBuilder(se *engine.SqlEngine, config servercfg.ServerConfig) serv
 }
 
 // getConfigFromServerConfig processes ServerConfig and returns server.Config for sql-server.
-func getConfigFromServerConfig(serverConfig servercfg.ServerConfig, plf server.ProtocolListenerFunc) (server.Config, error) {
-	serverConf, err := handleProtocolAndAddress(serverConfig)
+// activatedSql lists any systemd-activated MySQL listeners; when non-empty
+// they supersede both the configured inet host/port and the unix-socket
+// path, and are aggregated into a single listener via muxListener so the
+// underlying go-mysql-server machinery runs unchanged.
+func getConfigFromServerConfig(serverConfig servercfg.ServerConfig, plf server.ProtocolListenerFunc, activatedSql []net.Listener) (server.Config, error) {
+	serverConf, err := handleProtocolAndAddress(serverConfig, len(activatedSql) > 0)
 	if err != nil {
 		return server.Config{}, err
+	}
+
+	// Socket activation: if systemd handed us listener(s) for the MySQL
+	// role, aggregate them and feed the composite to the server. Setting
+	// serverConf.Listener causes go-mysql-server to skip its own
+	// net.Listen/bind, so the configured Protocol/Address/Socket are
+	// effectively ignored. This honours any mix of inet and unix sockets
+	// passed by the manager.
+	if len(activatedSql) > 0 {
+		ml, muxErr := newMuxListener(activatedSql...)
+		if muxErr != nil {
+			return server.Config{}, muxErr
+		}
+		serverConf.Listener = ml
+		// Reflect the real bound address(es) for logging/diagnostics.
+		addrs := make([]string, len(activatedSql))
+		for i, l := range activatedSql {
+			addrs[i] = l.Addr().Network() + "/" + l.Addr().String()
+		}
+		logrus.Infof("socket activation: serving MySQL on %d inherited listener(s): %s",
+			len(activatedSql), strings.Join(addrs, ", "))
 	}
 
 	serverConf.DisableClientMultiStatements = serverConfig.DisableClientMultiStatements()
@@ -1269,13 +1365,17 @@ func getConfigFromServerConfig(serverConfig servercfg.ServerConfig, plf server.P
 	return serverConf, nil
 }
 
-// handleProtocolAndAddress returns new server.Config object with only Protocol and Address defined.
-func handleProtocolAndAddress(serverConfig servercfg.ServerConfig) (server.Config, error) {
+// handleProtocolAndAddress returns new server.Config object with only
+// Protocol and Address defined. When socketActivation is true the
+// configured inet/unix bind targets are about to be supplanted by inherited
+// listeners, so the port-in-use probe (a speculative outbound dial) is
+// skipped — it would test a port we never intend to occupy.
+func handleProtocolAndAddress(serverConfig servercfg.ServerConfig, socketActivation bool) (server.Config, error) {
 	serverConf := server.Config{Protocol: "tcp"}
 
 	portAsString := strconv.Itoa(serverConfig.Port())
 	hostPort := net.JoinHostPort(serverConfig.Host(), portAsString)
-	if server.PortInUse(hostPort) {
+	if !socketActivation && server.PortInUse(hostPort) {
 		portInUseError := fmt.Errorf("Port %s already in use.", portAsString)
 		return server.Config{}, portInUseError
 	}
