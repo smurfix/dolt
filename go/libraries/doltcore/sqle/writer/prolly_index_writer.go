@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -257,21 +259,21 @@ func (m prollyIndexWriter) errForSecondaryUniqueKeyError(ctx context.Context, er
 // uniqueKeyError builds a sql.UniqueKeyError. It fetches the existing row using
 // |key| and passes it as the |existing| row.
 func (m prollyIndexWriter) uniqueKeyError(ctx context.Context, keyStr string, key val.Tuple, isPk bool) error {
-	existing := make(sql.Row, len(m.keyMap)+len(m.valMap))
+	existing := make(sql.Row, mappedRowSize(m.keyMap, m.valMap))
 
 	_ = m.mut.Get(ctx, key, func(key, value val.Tuple) (err error) {
 		kd := m.keyBld.Desc
-		for from := range m.keyMap {
-			to := m.keyMap.MapOrdinal(from)
-			if existing[to], err = tree.GetField(ctx, kd, from, key, m.mut.NodeStore()); err != nil {
+		for tupleOrdinal := range m.keyMap {
+			rowOrdinal := m.keyMap.MapOrdinal(tupleOrdinal)
+			if existing[rowOrdinal], err = tree.GetField(ctx, kd, tupleOrdinal, key, m.mut.NodeStore()); err != nil {
 				return err
 			}
 		}
 
 		vd := m.valBld.Desc
-		for from := range m.valMap {
-			to := m.valMap.MapOrdinal(from)
-			if existing[to], err = tree.GetField(ctx, vd, from, value, m.mut.NodeStore()); err != nil {
+		for tupleOrdinal := range m.valMap {
+			rowOrdinal := m.valMap.MapOrdinal(tupleOrdinal)
+			if existing[rowOrdinal], err = tree.GetField(ctx, vd, tupleOrdinal, value, m.mut.NodeStore()); err != nil {
 				return err
 			}
 		}
@@ -279,6 +281,25 @@ func (m prollyIndexWriter) uniqueKeyError(ctx context.Context, keyStr string, ke
 	})
 
 	return sql.NewUniqueKeyErr(keyStr, isPk, existing)
+}
+
+// mappedRowSize returns the minimum SQL row length required to address every mapped SQL row
+// ordinal across the supplied tuple-to-row mappings. Mapping values may be sparse when the SQL
+// row contains system-hidden virtual columns, so len(mapping) only counts tuple fields and is not
+// sufficient to size the destination row.
+func mappedRowSize(mappings ...val.OrdinalMapping) int {
+	var maxRowOrdinal int
+	var found bool
+	for _, mapping := range mappings {
+		for tupleOrdinal := range mapping {
+			maxRowOrdinal = max(maxRowOrdinal, mapping.MapOrdinal(tupleOrdinal))
+			found = true
+		}
+	}
+	if !found {
+		return 0
+	}
+	return maxRowOrdinal + 1
 }
 
 type prollySecondaryIndexWriter struct {
@@ -497,6 +518,18 @@ func isNoopUpdate(oldRow, newRow sql.Row, keyMap val.OrdinalMapping) bool {
 			if !ok || !bytes.Equal(oldBytes, newBytes) {
 				return false
 			}
+		} else if oldFloats, ok := oldVal.([]float32); ok {
+			newFloats, ok := newVal.([]float32)
+			if !ok || !slices.Equal(oldFloats, newFloats) {
+				return false
+			}
+		} else if oldVal == nil || newVal == nil {
+			if oldVal != newVal {
+				return false
+			}
+		} else if !reflect.ValueOf(oldVal).Comparable() || !reflect.ValueOf(newVal).Comparable() {
+			// Other uncomparable values are treated as changed.
+			return false
 		} else if oldVal != newVal {
 			return false
 		}

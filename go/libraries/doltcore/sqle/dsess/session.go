@@ -98,7 +98,33 @@ func DefaultSession(pro DoltDatabaseProvider, sessFunc WriteSessFunc) *DoltSessi
 	}
 }
 
+// NewDetachedSession returns a DoltSession backed by a fresh sql.BaseSession
+// rather than one supplied by a client connection. Use it when an external
+// session manager owns the DoltSession lifecycle and SQL requests run against
+// a *sql.Context pointing at this session instead of a per-connection one.
+func NewDetachedSession(
+	pro DoltDatabaseProvider,
+	conf config.ReadWriteConfig,
+	branchController *branch_control.Controller,
+	statsProvider sql.StatsProvider,
+	writeSessProv WriteSessFunc,
+	gcSafepointController *gcctx.GCSafepointController,
+	branchActivityTracker *doltdb.BranchActivityTracker,
+) (*DoltSession, error) {
+	return NewDoltSession(
+		sql.NewBaseSession(),
+		pro,
+		conf,
+		branchController,
+		statsProvider,
+		writeSessProv,
+		gcSafepointController,
+		branchActivityTracker,
+	)
+}
+
 // NewDoltSession creates a DoltSession object from a standard sql.Session and 0 or more Database objects.
+// sqlSess may be any *sql.BaseSession; callers with no per-connection session should use NewDetachedSession.
 func NewDoltSession(
 	sqlSess *sql.BaseSession,
 	pro DoltDatabaseProvider,
@@ -588,6 +614,41 @@ func (d *DoltSession) DirtyDatabases() []string {
 		}
 	}
 	return dbNames
+}
+
+// DirtyBranch identifies one branch of one database with uncommitted changes.
+type DirtyBranch struct {
+	DbName string // base name, never revision-qualified
+	Branch string
+}
+
+// DirtyBranches returns every (database, branch) pair with uncommitted changes.
+// Unlike DirtyDatabases it distinguishes branches within a database.
+func (d *DoltSession) DirtyBranches() []DirtyBranch {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var dirty []DirtyBranch
+	for _, dbState := range d.dbStates {
+		for _, branchState := range dbState.heads {
+			if branchState.dirty {
+				dirty = append(dirty, DirtyBranch{DbName: dbState.dbName, Branch: branchState.head})
+			}
+		}
+	}
+	return dirty
+}
+
+// IsBranchDirty reports whether |branch| of |dbName| has uncommitted changes.
+// |dbName| must be a base name, not revision-qualified.
+func (d *DoltSession) IsBranchDirty(dbName, branch string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	dbState, ok := d.dbStates[strings.ToLower(dbName)]
+	if !ok {
+		return false
+	}
+	branchState, ok := dbState.heads[strings.ToLower(branch)]
+	return ok && branchState.dirty
 }
 
 // CommitWorkingSet commits the working set for the transaction given, without creating a new dolt commit.
@@ -1147,13 +1208,19 @@ func (d *DoltSession) SetRoots(ctx *sql.Context, dbName string, roots doltdb.Roo
 	return d.SetWorkingSet(ctx, dbName, workingSet)
 }
 
-func (d *DoltSession) ResetGlobals(ctx *sql.Context, dbName string, root doltdb.RootValue) error {
+// MergeGlobals merges the sequence state recorded in |root| into the database's global
+// state, raising any tracked sequence that |root| is further along on.
+//
+// It cannot lower a sequence. Global sequence state is a high-water mark across every
+// branch, so a caller that has moved a working set backwards (dolt_reset --hard) is only
+// telling the tracker about relations it may not have seen, not undoing allocations.
+func (d *DoltSession) MergeGlobals(ctx *sql.Context, dbName string, root doltdb.RootValue) error {
 	sessionState, _, err := d.lookupDbState(ctx, dbName)
 	if err != nil {
 		return err
 	}
 
-	err = sessionState.dbState.globalState.InitWithRoots(ctx, root)
+	err = sessionState.dbState.globalState.MergeRoots(ctx, root)
 	if err != nil {
 		return err
 	}
