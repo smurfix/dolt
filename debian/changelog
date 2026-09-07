@@ -1,6 +1,7 @@
 dolt (2.3.2.3) smurf; urgency=medium
 
   * Merge systemd fix
+  * Cherry-pick gpg test key date fix
 
  -- Matthias Urlichs <matthias@urlichs.de>  Mon, 07 Sep 2026 17:34:49 +0200
 
