@@ -1,5 +1,5 @@
 # Allocates the static system identity used by the dolt sql-server
 # service. See sysusers.d(5).
 #
-#   u <name>   <uid>   <gid>   <gecos>                       <home>      <shell>
-u _dolt       -       -       "dolt SQL server"             /etc/dolt   -
+#u <name>   <uid>    <gecos>                       <home>      <shell>
+u _dolt       -      "dolt SQL server"             /etc/dolt   -
