@@ -24,6 +24,7 @@ CLAUDE.md
 .dir-locals.el
 .beads
 .gitattributes
+/debian/
 
 .de/
 .cursor
