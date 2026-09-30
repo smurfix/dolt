@@ -6,4 +6,4 @@
 #
 # /etc/dolt is root-owned but group-accessible to _dolt so the service
 # can read its configuration while administrators retain ownership.
-d /etc/dolt           0750 root _dolt -
+d /etc/dolt           0750 root dolt -
