@@ -1,6 +1,14 @@
 #!/usr/bin/make -f
 
 LDFLAGS := -s -w
+http_proxy=
+https_proxy=
+
+# debhelper's golang buildsystem leaks GO111MODULE=off et al. into every
+# override target merely by being probed during buildsystem autodetection,
+# which breaks this module-mode build (upstream go.mod lives in go/, not at
+# the top level, so the golang buildsystem is never actually selected).
+unexport GO111MODULE GOPATH GOPROXY GOTOOLCHAIN GOCACHE
 
 %:
 	dh $@
@@ -8,8 +16,15 @@ LDFLAGS := -s -w
 override_dh_auto_build:
 	@true
 
+# Hermetic GnuPG home for TestSignAndVerifyCommit, which imports a test key
+# via `gpg --import`; without this it would touch the invoking user's
+# ~/.gnupg (and fail if that holds a legacy secring.gpg it cannot migrate).
+TEST_GNUPGHOME := $(CURDIR)/debian/gnupghome-test
+
 override_dh_auto_test:
-	cd go && go test -vet=off -timeout 10m ./cmd/dolt/... ./utils/remotesrv/... ./store/cmd/noms/...
+	install -d -m 700 $(TEST_GNUPGHOME)
+	cd go && GNUPGHOME=$(TEST_GNUPGHOME) go test -vet=off -timeout 10m ./cmd/dolt/... ./utils/remotesrv/... ./store/cmd/noms/...
+	rm -rf $(TEST_GNUPGHOME)
 
 override_dh_auto_install:
 	mkdir -p $(CURDIR)/debian/tmp/usr/bin
