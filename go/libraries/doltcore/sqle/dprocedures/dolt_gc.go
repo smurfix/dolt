@@ -158,8 +158,10 @@ func (sc killConnectionsSafepointController) EstablishPostFinalizeSafepoint(ctx 
 	if err != nil {
 		return fmt.Errorf("%w: still saw these connections in the process list: %v", err, unkilled)
 	}
+	doltSession := dsess.DSessFromSess(sc.callCtx.Session)
+	doltSession.NotifyTransactionEnd()
 	sc.callCtx.Session.SetTransaction(nil)
-	dsess.DSessFromSess(sc.callCtx.Session).SetValidateErr(ErrServerPerformedGC)
+	doltSession.SetValidateErr(ErrServerPerformedGC)
 	return nil
 }
 
@@ -187,6 +189,8 @@ func (sc *sessionAwareSafepointController) BeginGC(ctx context.Context, keeper f
 	if err != nil {
 		return err
 	}
+	// The GC does not change callSession's roots after this point. Waiter
+	// lets other concurrent GCs visit it until Wait (or cancellation) returns.
 	sc.waiter = sc.controller.Waiter(ctx, sc.callSession, sc.visit)
 	return nil
 }

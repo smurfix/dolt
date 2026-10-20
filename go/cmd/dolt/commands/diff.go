@@ -1146,9 +1146,9 @@ func schemaFromCreateTableStmt(createTableStmt string) (schema.Schema, error) {
 			IsPartOfPK:    primaryCols[col.Name.Lowered()],
 			TypeInfo:      typeInfo,
 			Default:       defBuf.String(),
-			Generated:     "",    // TODO
-			OnUpdate:      "",    // TODO
-			Virtual:       false, // TODO
+			Generated:     genBuf.String(),
+			OnUpdate:      onUpBuf.String(),
+			Virtual:       col.Type.GeneratedExpr != nil && !bool(col.Type.Stored),
 			AutoIncrement: col.Type.Autoincrement == true,
 			Comment:       comment,
 		}
@@ -1632,7 +1632,7 @@ func diffRows(
 		rowWriter = realWriter
 	}
 
-	if !schema.ArePrimaryKeySetsDiffable(fromSch, toSch) {
+	if schema.ComparePrimaryKeys(fromSch, toSch) == schema.PrimaryKeysDiffer {
 		err := rowWriter.Close(sqlCtx)
 		if err != nil {
 			return errhand.VerboseErrorFromError(err)

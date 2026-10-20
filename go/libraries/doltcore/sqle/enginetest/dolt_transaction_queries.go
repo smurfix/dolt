@@ -840,8 +840,11 @@ var DoltTransactionTests = []queries.TransactionTest{
 			},
 			{
 				Query:            "/* client b */ commit",
-				Skip:             true, // multiple indexes covering the same column set cannot be merged: 'i1' and 'u1'
 				SkipResultsCheck: true,
+			},
+			{
+				Query:    "/* client b */ select * from t1 order by pk",
+				Expected: []sql.Row{{1, 1}, {2, 2}, {3, 3}},
 			},
 		},
 	},
@@ -2621,6 +2624,214 @@ var BranchIsolationTests = []queries.TransactionTest{
 		},
 	},
 	{
+		Name: "atomic writes to three branches merge concurrent working sets",
+		SetUpScript: []string{
+			"create table t (pk int primary key, v int)",
+			"insert into t values (1, 0)",
+			"call dolt_commit('-Am', 'setup')",
+			"call dolt_branch('b1')",
+			"call dolt_branch('b2')",
+			"set autocommit = 0",
+		},
+		Assertions: []queries.ScriptTestAssertion{
+			{
+				Query:            "/* client a */ start transaction",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client b */ start transaction",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client a */ insert into `mydb/main`.t values (2, 20)",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client a */ insert into `mydb/b1`.t values (2, 20)",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client a */ insert into `mydb/b2`.t values (2, 20)",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client b */ insert into `mydb/main`.t values (3, 30)",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client b */ insert into `mydb/b1`.t values (3, 30)",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client b */ insert into `mydb/b2`.t values (3, 30)",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client b */ commit",
+				SkipResultsCheck: true,
+			},
+			{
+				Query: "/* client a */ select * from `mydb/b1`.t order by pk",
+				Expected: []sql.Row{
+					{1, 0},
+					{2, 20},
+				},
+			},
+			{
+				Query:            "/* client a */ commit",
+				SkipResultsCheck: true,
+			},
+			{
+				Query: "/* client a */ select * from `mydb/main`.t order by pk",
+				Expected: []sql.Row{
+					{1, 0},
+					{2, 20},
+					{3, 30},
+				},
+			},
+			{
+				Query: "/* client a */ select * from `mydb/b1`.t order by pk",
+				Expected: []sql.Row{
+					{1, 0},
+					{2, 20},
+					{3, 30},
+				},
+			},
+			{
+				Query: "/* client a */ select * from `mydb/b2`.t order by pk",
+				Expected: []sql.Row{
+					{1, 0},
+					{2, 20},
+					{3, 30},
+				},
+			},
+			{
+				Query: "/* client a */ select * from t as of 'HEAD'",
+				Expected: []sql.Row{
+					{1, 0},
+				},
+			},
+		},
+	},
+	{
+		Name: "conflict on one branch rolls back every branch",
+		SetUpScript: []string{
+			"create table t (pk int primary key, v int)",
+			"insert into t values (1, 0)",
+			"call dolt_commit('-Am', 'setup')",
+			"call dolt_branch('b1')",
+			"call dolt_branch('b2')",
+			"set autocommit = 0",
+		},
+		Assertions: []queries.ScriptTestAssertion{
+			{
+				Query:            "/* client a */ start transaction",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client b */ start transaction",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client a */ insert into `mydb/b1`.t values (2, 20)",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client a */ insert into `mydb/b2`.t values (2, 20)",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client a */ update t set v = 10 where pk = 1",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client b */ update t set v = 20 where pk = 1",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client b */ commit",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:       "/* client a */ commit",
+				ExpectedErr: sql.ErrLockDeadlock,
+			},
+			{
+				Query:            "/* client b */ start transaction",
+				SkipResultsCheck: true,
+			},
+			{
+				Query: "/* client b */ select * from `mydb/b1`.t",
+				Expected: []sql.Row{
+					{1, 0},
+				},
+			},
+			{
+				Query: "/* client b */ select * from `mydb/b2`.t",
+				Expected: []sql.Row{
+					{1, 0},
+				},
+			},
+			{
+				Query: "/* client a */ select * from t",
+				Expected: []sql.Row{
+					{1, 20},
+				},
+			},
+		},
+	},
+	{
+		Name: "rollback discards all dirty branch working sets",
+		SetUpScript: []string{
+			"create table t (pk int primary key, v int)",
+			"insert into t values (1, 0)",
+			"call dolt_commit('-Am', 'setup')",
+			"call dolt_branch('b1')",
+			"call dolt_branch('b2')",
+			"set autocommit = 0",
+		},
+		Assertions: []queries.ScriptTestAssertion{
+			{
+				Query:            "/* client a */ start transaction",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client a */ insert into `mydb/main`.t values (2, 20)",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client a */ insert into `mydb/b1`.t values (2, 20)",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client a */ insert into `mydb/b2`.t values (2, 20)",
+				SkipResultsCheck: true,
+			},
+			{
+				Query:            "/* client a */ rollback",
+				SkipResultsCheck: true,
+			},
+			{
+				Query: "/* client b */ select * from `mydb/main`.t",
+				Expected: []sql.Row{
+					{1, 0},
+				},
+			},
+			{
+				Query: "/* client b */ select * from `mydb/b1`.t",
+				Expected: []sql.Row{
+					{1, 0},
+				},
+			},
+			{
+				Query: "/* client b */ select * from `mydb/b2`.t",
+				Expected: []sql.Row{
+					{1, 0},
+				},
+			},
+		},
+	},
+	{
 		Name: "clients can't see changes on other branch heads made since transaction start",
 		SetUpScript: []string{
 			"create table t1 (a int)",
@@ -2723,6 +2934,223 @@ var BranchIsolationTests = []queries.TransactionTest{
 			{
 				Query:    "/* client a */ select name from dolt_branches order by 1",
 				Expected: []sql.Row{{"b2"}, {"main"}},
+			},
+		},
+	},
+	{
+		Name: "dolt_tags name index uses transaction snapshot",
+		SetUpScript: []string{"call dolt_commit('--allow-empty','-m','original')",
+			"call dolt_tag('alpha')",
+			"call dolt_tag('beta')",
+			"create table wanted (name varchar(100))",
+			"insert into wanted values ('alpha'),('beta'),('gamma'),('delta')",
+			"set autocommit = 0",
+		},
+		Assertions: []queries.ScriptTestAssertion{
+			{
+				Query:    "/* client a */ start transaction",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client b */ call dolt_tag('-d','beta')",
+				Expected: []sql.Row{{0}},
+			},
+			{
+				Query:    "/* client b */ call dolt_tag('gamma')",
+				Expected: []sql.Row{{0}},
+			},
+			{
+				Query:    "/* client b */ commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client b */ start transaction",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:           "/* client a */ select tag_name from dolt_tags where tag_name = 'beta'",
+				Expected:        []sql.Row{{"beta"}},
+				ExpectedIndexes: []string{"dolt_tags_name_idx"},
+			},
+			{
+				Query:           "/* client a */ select tag_name from dolt_tags where tag_name = 'gamma'",
+				Expected:        []sql.Row{},
+				ExpectedIndexes: []string{"dolt_tags_name_idx"},
+			},
+			{
+				Query:           "/* client a */ select tag_name from dolt_tags where tag_name between 'alpha' and 'gamma' order by tag_name",
+				Expected:        []sql.Row{{"alpha"}, {"beta"}},
+				ExpectedIndexes: []string{"dolt_tags_name_idx"},
+			},
+			{
+				Query:           "/* client b */ select tag_name from dolt_tags where tag_name between 'alpha' and 'gamma' order by tag_name",
+				Expected:        []sql.Row{{"alpha"}, {"gamma"}},
+				ExpectedIndexes: []string{"dolt_tags_name_idx"},
+			},
+			{
+				Query:           "/* client a */ select /*+ LOOKUP_JOIN(w, r) */ r.tag_name from wanted w join dolt_tags r on w.name=r.tag_name order by r.tag_name",
+				Expected:        []sql.Row{{"alpha"}, {"beta"}},
+				ExpectedIndexes: []string{"dolt_tags_name_idx"},
+			},
+			{
+				Query:    "/* client a */ select tag_name from dolt_tags ignore index (dolt_tags_name_idx) order by tag_name",
+				Expected: []sql.Row{{"alpha"}, {"beta"}},
+			},
+			{
+				Query:    "/* client a */ commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client a */ start transaction",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:           "/* client a */ select tag_name from dolt_tags where tag_name in ('alpha','beta','gamma') order by tag_name",
+				Expected:        []sql.Row{{"alpha"}, {"gamma"}},
+				ExpectedIndexes: []string{"dolt_tags_name_idx"},
+			},
+			{
+				Query:    "/* client a */ call dolt_tag('-d','gamma')",
+				Expected: []sql.Row{{0}},
+			},
+			{
+				Query:    "/* client a */ call dolt_tag('delta')",
+				Expected: []sql.Row{{0}},
+			},
+			{
+				Query:    "/* client a */ commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:           "/* client b */ select tag_name from dolt_tags where tag_name between 'alpha' and 'gamma' order by tag_name desc",
+				Expected:        []sql.Row{{"gamma"}, {"alpha"}},
+				ExpectedIndexes: []string{"dolt_tags_name_idx"},
+			},
+			{
+				Query:    "/* client b */ select tag_name from dolt_tags ignore index (dolt_tags_name_idx) order by tag_name",
+				Expected: []sql.Row{{"alpha"}, {"gamma"}},
+			},
+			{
+				Query:    "/* client b */ commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client b */ start transaction",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:           "/* client b */ select tag_name from dolt_tags where tag_name in ('alpha','beta','gamma','delta') order by tag_name",
+				Expected:        []sql.Row{{"alpha"}, {"delta"}},
+				ExpectedIndexes: []string{"dolt_tags_name_idx"},
+			},
+		},
+	},
+
+	{
+		Name: "dolt_branches name index uses transaction snapshot",
+		SetUpScript: []string{"call dolt_commit('--allow-empty','-m','original')",
+			"call dolt_branch('alpha')",
+			"call dolt_branch('beta')",
+			"create table wanted (name varchar(100))",
+			"insert into wanted values ('alpha'),('beta'),('gamma'),('delta')",
+			"set autocommit = 0",
+		},
+		Assertions: []queries.ScriptTestAssertion{
+			{
+				Query:    "/* client a */ start transaction",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client b */ call dolt_branch('-d','beta')",
+				Expected: []sql.Row{{0}},
+			},
+			{
+				Query:    "/* client b */ call dolt_branch('gamma')",
+				Expected: []sql.Row{{0}},
+			},
+			{
+				Query:    "/* client b */ commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client b */ start transaction",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:           "/* client a */ select name from dolt_branches where name = 'beta'",
+				Expected:        []sql.Row{{"beta"}},
+				ExpectedIndexes: []string{"dolt_branches_name_idx"},
+			},
+			{
+				Query:           "/* client a */ select name from dolt_branches where name = 'gamma'",
+				Expected:        []sql.Row{},
+				ExpectedIndexes: []string{"dolt_branches_name_idx"},
+			},
+			{
+				Query:           "/* client a */ select name from dolt_branches where name between 'alpha' and 'gamma' order by name",
+				Expected:        []sql.Row{{"alpha"}, {"beta"}},
+				ExpectedIndexes: []string{"dolt_branches_name_idx"},
+			},
+			{
+				Query:           "/* client b */ select name from dolt_branches where name between 'alpha' and 'gamma' order by name",
+				Expected:        []sql.Row{{"alpha"}, {"gamma"}},
+				ExpectedIndexes: []string{"dolt_branches_name_idx"},
+			},
+			{
+				Query:           "/* client a */ select /*+ LOOKUP_JOIN(w, r) */ r.name from wanted w join dolt_branches r on w.name=r.name order by r.name",
+				Expected:        []sql.Row{{"alpha"}, {"beta"}},
+				ExpectedIndexes: []string{"dolt_branches_name_idx"},
+			},
+			{
+				Query:    "/* client a */ select name from dolt_branches ignore index (dolt_branches_name_idx) order by name",
+				Expected: []sql.Row{{"alpha"}, {"beta"}, {"main"}},
+			},
+			{
+				Query:    "/* client a */ commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client a */ start transaction",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:           "/* client a */ select name from dolt_branches where name in ('alpha','beta','gamma') order by name",
+				Expected:        []sql.Row{{"alpha"}, {"gamma"}},
+				ExpectedIndexes: []string{"dolt_branches_name_idx"},
+			},
+			{
+				Query:    "/* client a */ call dolt_branch('-d','gamma')",
+				Expected: []sql.Row{{0}},
+			},
+			{
+				Query:    "/* client a */ call dolt_branch('delta')",
+				Expected: []sql.Row{{0}},
+			},
+			{
+				Query:    "/* client a */ commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:           "/* client b */ select name from dolt_branches where name between 'alpha' and 'gamma' order by name desc",
+				Expected:        []sql.Row{{"gamma"}, {"alpha"}},
+				ExpectedIndexes: []string{"dolt_branches_name_idx"},
+			},
+			{
+				Query:    "/* client b */ select name from dolt_branches ignore index (dolt_branches_name_idx) order by name",
+				Expected: []sql.Row{{"alpha"}, {"gamma"}, {"main"}},
+			},
+			{
+				Query:    "/* client b */ commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client b */ start transaction",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:           "/* client b */ select name from dolt_branches where name in ('alpha','beta','gamma','delta') order by name",
+				Expected:        []sql.Row{{"alpha"}, {"delta"}},
+				ExpectedIndexes: []string{"dolt_branches_name_idx"},
 			},
 		},
 	},
@@ -2845,8 +3273,24 @@ var MultiDbTransactionTests = []queries.ScriptTest{
 				},
 			},
 			{
-				Query:          "commit",
-				ExpectedErrStr: "no changes to dolt_commit on branch main",
+				Query:    "commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "select * from `mydb/b1`.t1 as of 'HEAD' order by a",
+				Expected: []sql.Row{{1}, {2}},
+			},
+			{
+				Query:    "select count(*) from `mydb/b1`.dolt_log where message = 'Transaction commit'",
+				Expected: []sql.Row{{1}},
+			},
+			{
+				Query:    "commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "select count(*) from `mydb/b1`.dolt_log where message = 'Transaction commit'",
+				Expected: []sql.Row{{1}},
 			},
 			{
 				Query:    "select * from `mydb/main`.t1 order by a",
@@ -2900,7 +3344,7 @@ var MultiDbTransactionTests = []queries.ScriptTest{
 			},
 			{
 				Query:          "call dolt_commit('-am', 'changes on b1')",
-				ExpectedErrStr: "nothing to commit", // this error is different from what you get with @@dolt_transaction_commit
+				ExpectedErrStr: "nothing to commit",
 			},
 			{
 				Query:    "use mydb/b1",
@@ -2932,8 +3376,24 @@ var MultiDbTransactionTests = []queries.ScriptTest{
 		},
 		Assertions: []queries.ScriptTestAssertion{
 			{
-				Query:          "insert into `mydb/b1`.t1 values (1)",
-				ExpectedErrStr: "no changes to dolt_commit on branch main",
+				Query:    "insert into `mydb/b1`.t1 values (1)",
+				Expected: []sql.Row{{types.OkResult{RowsAffected: 1}}},
+			},
+			{
+				Query:    "select * from `mydb/b1`.t1 as of 'HEAD' order by a",
+				Expected: []sql.Row{{1}},
+			},
+			{
+				Query:    "select count(*) from `mydb/b1`.dolt_log where message = 'Transaction commit'",
+				Expected: []sql.Row{{1}},
+			},
+			{
+				Query:    "commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "select count(*) from `mydb/b1`.dolt_log where message = 'Transaction commit'",
+				Expected: []sql.Row{{1}},
 			},
 			{
 				Query:    "use mydb/b1",
@@ -3119,7 +3579,7 @@ var MultiDbTransactionTests = []queries.ScriptTest{
 			},
 			{
 				Query:          "call dolt_commit('-am', 'changes on b1')",
-				ExpectedErrStr: "nothing to commit", // this error is different from what you get with @@dolt_transaction_commit
+				ExpectedErrStr: "nothing to commit",
 			},
 			{
 				Query:    "use db1/b1",
@@ -3136,6 +3596,46 @@ var MultiDbTransactionTests = []queries.ScriptTest{
 			{
 				Query:    "select message from dolt_log order by date desc limit 1",
 				Expected: []sql.Row{{"other changes on b1"}},
+			},
+		},
+	},
+	{
+		Name: "empty dolt_commit with automatic commits and another dirty database",
+		SetUpScript: []string{
+			"create database db1",
+			"create table db1.t1 (a int)",
+			"use db1",
+			"call dolt_commit('-Am', 'new table')",
+			"call dolt_branch('b1')",
+			"use mydb",
+			"set autocommit = off",
+			"set dolt_transaction_commit = on",
+			"insert into `db1/b1`.t1 values (1)",
+		},
+		Assertions: []queries.ScriptTestAssertion{
+			{
+				Query:          "call dolt_commit('-am', 'no changes here')",
+				ExpectedErrStr: "nothing to commit",
+			},
+			{
+				Query:    "select * from `db1/b1`.t1 as of 'HEAD'",
+				Expected: []sql.Row{{1}},
+			},
+			{
+				Query:    "select count(*) from `db1/b1`.dolt_log where message = 'Transaction commit'",
+				Expected: []sql.Row{{1}},
+			},
+			{
+				Query:          "call dolt_commit('-am', 'still no changes')",
+				ExpectedErrStr: "nothing to commit",
+			},
+			{
+				Query:    "commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "select count(*) from `db1/b1`.dolt_log where message = 'Transaction commit'",
+				Expected: []sql.Row{{1}},
 			},
 		},
 	},
@@ -3216,8 +3716,24 @@ var MultiDbTransactionTests = []queries.ScriptTest{
 		},
 		Assertions: []queries.ScriptTestAssertion{
 			{
-				Query:          "insert into `db1/b1`.t1 values (1)",
-				ExpectedErrStr: "no changes to dolt_commit on database mydb",
+				Query:    "insert into `db1/b1`.t1 values (1)",
+				Expected: []sql.Row{{types.OkResult{RowsAffected: 1}}},
+			},
+			{
+				Query:    "select * from `db1/b1`.t1 as of 'HEAD' order by a",
+				Expected: []sql.Row{{1}},
+			},
+			{
+				Query:    "select count(*) from `db1/b1`.dolt_log where message = 'Transaction commit'",
+				Expected: []sql.Row{{1}},
+			},
+			{
+				Query:    "commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "select count(*) from `db1/b1`.dolt_log where message = 'Transaction commit'",
+				Expected: []sql.Row{{1}},
 			},
 		},
 	},
@@ -3247,8 +3763,24 @@ var MultiDbTransactionTests = []queries.ScriptTest{
 				},
 			},
 			{
-				Query:          "commit",
-				ExpectedErrStr: "no changes to dolt_commit on database mydb",
+				Query:    "commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "select * from `db1/b1`.t1 as of 'HEAD' order by a",
+				Expected: []sql.Row{{1}},
+			},
+			{
+				Query:    "select count(*) from `db1/b1`.dolt_log where message = 'Transaction commit'",
+				Expected: []sql.Row{{1}},
+			},
+			{
+				Query:    "commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "select count(*) from `db1/b1`.dolt_log where message = 'Transaction commit'",
+				Expected: []sql.Row{{1}},
 			},
 		},
 	},
@@ -3275,8 +3807,19 @@ var MultiDbTransactionTests = []queries.ScriptTest{
 				},
 			},
 			{
-				Query:          "commit",
-				ExpectedErrStr: "Cannot commit changes on more than one branch / database",
+				Query: "commit", Expected: []sql.Row{},
+			},
+			{
+				Query: "select * from `mydb/main`.t1",
+				Expected: []sql.Row{
+					{1},
+				},
+			},
+			{
+				Query: "select * from `mydb/b1`.t1",
+				Expected: []sql.Row{
+					{2},
+				},
 			},
 		},
 	},
@@ -3307,8 +3850,19 @@ var MultiDbTransactionTests = []queries.ScriptTest{
 				},
 			},
 			{
-				Query:          "commit",
-				ExpectedErrStr: "Cannot commit changes on more than one branch / database",
+				Query: "commit", Expected: []sql.Row{},
+			},
+			{
+				Query: "select * from `mydb/main`.t1",
+				Expected: []sql.Row{
+					{1},
+				},
+			},
+			{
+				Query: "select * from `mydb/b1`.t1",
+				Expected: []sql.Row{
+					{2},
+				},
 			},
 		},
 	},
@@ -3337,7 +3891,7 @@ var MultiDbTransactionTests = []queries.ScriptTest{
 			},
 			{
 				Query:          "commit",
-				ExpectedErrStr: "Cannot commit changes on more than one branch / database",
+				ExpectedErrStr: "Cannot atomically commit changes to more than one database",
 			},
 		},
 	},

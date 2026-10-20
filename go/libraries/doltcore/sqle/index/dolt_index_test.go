@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cockroachdb/apd/v3"
@@ -1461,8 +1462,10 @@ func convertSqlRowToInt64(sqlRows []sql.Row) []sql.Row {
 }
 
 func TestSplitNullsFromRange(t *testing.T) {
+	nullsLast := []sql.IndexColumnOrder{{NullsLast: true}, {NullsLast: true}, {NullsLast: true}}
+
 	t.Run("EmptyRange", func(t *testing.T) {
-		r, err := index.SplitNullsFromRange(context.Background(), sql.MySQLRange{})
+		r, err := index.SplitNullsFromRange(context.Background(), sql.MySQLRange{}, nullsLast)
 		assert.NoError(t, err)
 		assert.NotNil(t, r)
 		assert.Len(t, r, 1)
@@ -1471,7 +1474,7 @@ func TestSplitNullsFromRange(t *testing.T) {
 
 	t.Run("ThreeColumnNoNullsRange", func(t *testing.T) {
 		r := sql.MySQLRange{sql.LessThanRangeColumnExpr(10, types.Int8), sql.GreaterThanRangeColumnExpr(16, types.Int8), sql.NotNullRangeColumnExpr(types.Int8)}
-		rs, err := index.SplitNullsFromRange(context.Background(), r)
+		rs, err := index.SplitNullsFromRange(context.Background(), r, nullsLast)
 		assert.NoError(t, err)
 		assert.NotNil(t, rs)
 		assert.Len(t, rs, 1)
@@ -1481,7 +1484,7 @@ func TestSplitNullsFromRange(t *testing.T) {
 
 	t.Run("LastColumnOnlyNull", func(t *testing.T) {
 		r := sql.MySQLRange{sql.LessThanRangeColumnExpr(10, types.Int8), sql.GreaterThanRangeColumnExpr(16, types.Int8), sql.NullRangeColumnExpr(types.Int8)}
-		rs, err := index.SplitNullsFromRange(context.Background(), r)
+		rs, err := index.SplitNullsFromRange(context.Background(), r, nullsLast)
 		assert.NoError(t, err)
 		assert.NotNil(t, rs)
 		assert.Len(t, rs, 1)
@@ -1491,7 +1494,17 @@ func TestSplitNullsFromRange(t *testing.T) {
 
 	t.Run("LastColumnAll", func(t *testing.T) {
 		r := sql.MySQLRange{sql.LessThanRangeColumnExpr(10, types.Int8), sql.GreaterThanRangeColumnExpr(16, types.Int8), sql.AllRangeColumnExpr(types.Int8)}
-		rs, err := index.SplitNullsFromRange(context.Background(), r)
+		rs, err := index.SplitNullsFromRange(context.Background(), r, nullsLast)
+		assert.NoError(t, err)
+		assert.NotNil(t, rs)
+		assert.Len(t, rs, 1)
+		assert.Equal(t, r, rs[0])
+	})
+
+	t.Run("LastColumnNullOrBelow", func(t *testing.T) {
+		nullOrBelow := sql.MySQLRangeColumnExpr{LowerBound: sql.BelowNull{}, UpperBound: sql.Below{Key: 10}, Typ: types.Int8}
+		r := sql.MySQLRange{sql.LessThanRangeColumnExpr(10, types.Int8), sql.GreaterThanRangeColumnExpr(16, types.Int8), nullOrBelow}
+		rs, err := index.SplitNullsFromRange(context.Background(), r, nullsLast)
 		assert.NoError(t, err)
 		assert.NotNil(t, rs)
 		assert.Len(t, rs, 2)
@@ -1500,12 +1513,14 @@ func TestSplitNullsFromRange(t *testing.T) {
 		assert.Equal(t, r[:2], rs[0][:2])
 		assert.Equal(t, r[:2], rs[1][:2])
 		assert.Equal(t, sql.NullRangeColumnExpr(types.Int8), rs[0][2])
-		assert.Equal(t, sql.NotNullRangeColumnExpr(types.Int8), rs[1][2])
+		assert.Equal(t, sql.AboveNull{}, rs[1][2].LowerBound)
+		assert.Equal(t, sql.Below{Key: 10}, rs[1][2].UpperBound)
 	})
 
-	t.Run("FirstColumnAll", func(t *testing.T) {
-		r := sql.MySQLRange{sql.AllRangeColumnExpr(types.Int8), sql.LessThanRangeColumnExpr(10, types.Int8), sql.GreaterThanRangeColumnExpr(16, types.Int8)}
-		rs, err := index.SplitNullsFromRange(context.Background(), r)
+	t.Run("FirstColumnNullOrBelow", func(t *testing.T) {
+		nullOrBelow := sql.MySQLRangeColumnExpr{LowerBound: sql.BelowNull{}, UpperBound: sql.Below{Key: 10}, Typ: types.Int8}
+		r := sql.MySQLRange{nullOrBelow, sql.LessThanRangeColumnExpr(10, types.Int8), sql.GreaterThanRangeColumnExpr(16, types.Int8)}
+		rs, err := index.SplitNullsFromRange(context.Background(), r, nullsLast)
 		assert.NoError(t, err)
 		assert.NotNil(t, rs)
 		assert.Len(t, rs, 2)
@@ -1514,14 +1529,66 @@ func TestSplitNullsFromRange(t *testing.T) {
 		assert.Equal(t, r[1:], rs[0][1:])
 		assert.Equal(t, r[1:], rs[1][1:])
 		assert.Equal(t, sql.NullRangeColumnExpr(types.Int8), rs[0][0])
-		assert.Equal(t, sql.NotNullRangeColumnExpr(types.Int8), rs[1][0])
+		assert.Equal(t, sql.AboveNull{}, rs[1][0].LowerBound)
+		assert.Equal(t, sql.Below{Key: 10}, rs[1][0].UpperBound)
 	})
 
-	t.Run("AllColumnAll", func(t *testing.T) {
-		r := sql.MySQLRange{sql.AllRangeColumnExpr(types.Int8), sql.AllRangeColumnExpr(types.Int8), sql.AllRangeColumnExpr(types.Int8)}
-		rs, err := index.SplitNullsFromRange(context.Background(), r)
+	t.Run("AllColumnNullOrBelow", func(t *testing.T) {
+		nullOrBelow := sql.MySQLRangeColumnExpr{LowerBound: sql.BelowNull{}, UpperBound: sql.Below{Key: 10}, Typ: types.Int8}
+		r := sql.MySQLRange{nullOrBelow, nullOrBelow, nullOrBelow}
+		rs, err := index.SplitNullsFromRange(context.Background(), r, nullsLast)
 		assert.NoError(t, err)
 		assert.NotNil(t, rs)
 		assert.Len(t, rs, 8)
+	})
+
+	t.Run("DefaultOrderColumnsAreNotSplit", func(t *testing.T) {
+		nullOrBelow := sql.MySQLRangeColumnExpr{LowerBound: sql.BelowNull{}, UpperBound: sql.Below{Key: 10}, Typ: types.Int8}
+		r := sql.MySQLRange{nullOrBelow, nullOrBelow, nullOrBelow}
+		rs, err := index.SplitNullsFromRange(context.Background(), r, []sql.IndexColumnOrder{{}, {Descending: true}})
+		assert.NoError(t, err)
+		assert.NotNil(t, rs)
+		assert.Len(t, rs, 2)
+		assert.Equal(t, r[0], rs[0][0])
+		assert.Equal(t, r[2], rs[0][2])
+		assert.Equal(t, sql.NullRangeColumnExpr(types.Int8), rs[0][1])
+		assert.Equal(t, sql.AboveNull{}, rs[1][1].LowerBound)
+		assert.Equal(t, sql.Below{Key: 10}, rs[1][1].UpperBound)
+	})
+}
+
+// TestKeylessIndexIterCloseStopsProducer checks that closing a keyless index
+// iterator before EOF stops its background row producer while the caller's
+// context is still live.
+func TestKeylessIndexIterCloseStopsProducer(t *testing.T) {
+	ctx := context.Background()
+	dEnv := dtestutils.CreateTestEnv()
+	defer dEnv.Close()
+	root, err := sqle.ExecuteSql(ctx, dEnv, `
+CREATE TABLE keyless (v BIGINT);
+CREATE INDEX idx_v ON keyless(v);
+INSERT INTO keyless VALUES (1), (1), (1), (1), (1), (1), (1), (1), (1), (1);
+`)
+	require.NoError(t, err)
+	tbl, ok, err := root.GetTable(ctx, doltdb.TableName{Name: "keyless"})
+	require.NoError(t, err)
+	require.True(t, ok)
+	indexes, err := index.DoltIndexesFromTable(ctx, "dolt", "keyless", tbl)
+	require.NoError(t, err)
+	idx := indexes[0].(index.DoltIndex)
+
+	// synctest.Test fails if the producer goroutine is still blocked when the
+	// test function returns.Cl
+	synctest.Test(t, func(t *testing.T) {
+		sqlCtx := sql.NewEmptyContext()
+		lookup, err := sql.NewMySQLIndexBuilder(sqlCtx, idx).Equals(sqlCtx, idx.Expressions()[0], nil, 1).Build(sqlCtx)
+		require.NoError(t, err)
+		pkSch, err := sqlutil.FromDoltSchema(sqlCtx, "", "keyless", idx.Schema())
+		require.NoError(t, err)
+		iter, err := index.RowIterForIndexLookup(sqlCtx, NoCacheTableable{tbl}, lookup, pkSch, nil)
+		require.NoError(t, err)
+		_, err = iter.Next(sqlCtx)
+		require.NoError(t, err)
+		require.NoError(t, iter.Close(sqlCtx))
 	})
 }
