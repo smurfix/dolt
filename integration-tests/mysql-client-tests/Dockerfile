@@ -76,6 +76,7 @@ RUN pip install --no-cache-dir mysql-connector-python==8.0.33 PyMySQL==1.0.2 sql
 COPY dolt/integration-tests/mysql-client-tests/python/ /build/python/
 WORKDIR /build/python/
 RUN pyinstaller --onefile pymysql-test.py
+RUN pyinstaller --onefile insert-security-test.py
 RUN pyinstaller --onefile --collect-all mysql.connector sqlalchemy-test.py
 RUN pyinstaller --onefile --collect-all mysql.connector mysql-connector-test.py
 RUN pyinstaller --onefile mariadb-connector-test.py
@@ -101,7 +102,7 @@ RUN mkdir -p /build/bin && \
     cp /build/elixir/myxql/burrito_out/simple_linux /build/bin/myxql-driver-test && \
     cp /build/elixir/mysql/burrito_out/mysql_otp_linux /build/bin/mysql-otp-test
 
-FROM maven:3.8-openjdk-17-slim AS java_clients_build
+FROM maven:3.9-eclipse-temurin-17-noble AS java_clients_build
 RUN apt-get update && apt-get install -y binutils && rm -rf /var/lib/apt/lists/*
 COPY dolt/integration-tests/mysql-client-tests/java/ /build/java/
 WORKDIR /build/java/
